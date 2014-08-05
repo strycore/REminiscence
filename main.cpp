@@ -25,7 +25,11 @@ static const char *USAGE =
 	"Usage: %s [OPTIONS]...\n"
 	"  --datapath=PATH   Path to data files (default 'DATA')\n"
 	"  --savepath=PATH   Path to save files (default '.')\n"
-	"  --levelnum=NUM    Starting level (default '0')";
+	"  --levelnum=NUM    Starting level (default '0')\n"
+#ifdef USE_GL
+	"  --shader=PATH     Path to .xml shader (default none)\n"
+#endif
+;
 
 static bool parseOption(const char *arg, const char *longCmd, const char **opt) {
 	bool handled = false;
@@ -87,12 +91,17 @@ int main(int argc, char *argv[]) {
 	const char *dataPath = "DATA";
 	const char *savePath = ".";
 	const char *levelNum = "0";
+	const char *shaderPath = 0;
+	const int scaling = 4;
 	for (int i = 1; i < argc; ++i) {
 		bool opt = false;
 		if (strlen(argv[i]) >= 2) {
 			opt |= parseOption(argv[i], "datapath=", &dataPath);
 			opt |= parseOption(argv[i], "savepath=", &savePath);
 			opt |= parseOption(argv[i], "levelnum=", &levelNum);
+#ifdef USE_GL
+			opt |= parseOption(argv[i], "shader=", &shaderPath);
+#endif
 		}
 		if (!opt) {
 			printf(USAGE, argv[0]);
@@ -108,6 +117,7 @@ int main(int argc, char *argv[]) {
 	}
 	Language language = detectLanguage(&fs);
 	SystemStub *stub = SystemStub_SDL_create();
+	stub->setShader(shaderPath, scaling);
 	Game *g = new Game(stub, &fs, savePath, atoi(levelNum), (ResourceType)version, language);
 	g->run();
 	delete g;

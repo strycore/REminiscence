@@ -16,6 +16,10 @@
  */
 
 #include <SDL.h>
+#ifdef USE_GL
+#include <GL/glew.h>
+#include "shader.h"
+#endif
 #include "scaler.h"
 #include "systemstub.h"
 
@@ -41,6 +45,13 @@ struct SystemStub_SDL : SystemStub {
 	bool _fadeOnUpdateScreen;
 	void (*_audioCbProc)(void *, int8_t *, int);
 	void *_audioCbData;
+#ifdef USE_GL
+	GLuint _textureId;
+	Shader _shader;
+	GLuint _vertexShaderId, _fragmentShaderId, _shaderProgramId;
+	int _frameCount;
+	int _multiplier;
+#endif
 
 	virtual ~SystemStub_SDL() {}
 	virtual void init(const char *title, int w, int h);
@@ -60,6 +71,7 @@ struct SystemStub_SDL : SystemStub {
 	virtual uint32_t getOutputSampleRate();
 	virtual void lockAudio();
 	virtual void unlockAudio();
+	virtual void setShader(const char *path, int mul);
 
 	void prepareGfxMode();
 	void cleanupGfxMode();
@@ -67,6 +79,10 @@ struct SystemStub_SDL : SystemStub {
 	void flipGfx();
 	void forceGfxRedraw();
 	void drawRect(SDL_Rect *rect, uint8_t color, uint16_t *dst, uint16_t dstPitch);
+#ifdef USE_GL
+	void createShader();
+	void createTexture();
+#endif
 };
 
 SystemStub *SystemStub_SDL_create() {
@@ -74,6 +90,9 @@ SystemStub *SystemStub_SDL_create() {
 }
 
 void SystemStub_SDL::init(const char *title, int w, int h) {
+	char buf[32];
+	snprintf(buf, sizeof(buf), "SDL_VIDEO_CENTERED=1");
+	putenv(buf);
 	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK);
 	SDL_ShowCursor(SDL_DISABLE);
 	SDL_WM_SetCaption(title, NULL);
@@ -92,7 +111,16 @@ void SystemStub_SDL::init(const char *title, int w, int h) {
 	_fullscreen = false;
 	_currentScaler = 2;
 	memset(_pal, 0, sizeof(_pal));
+#ifdef USE_GL
+	_frameCount = 0;
 	prepareGfxMode();
+	glewInit();
+	glEnable(GL_TEXTURE_2D);
+	createShader();
+	createTexture();
+#else
+	prepareGfxMode();
+#endif
 	_joystick = NULL;
 	if (SDL_NumJoysticks() > 0) {
 		_joystick = SDL_JoystickOpen(0);
@@ -113,7 +141,11 @@ void SystemStub_SDL::setPalette(const uint8_t *pal, int n) {
 		uint8_t r = pal[i * 3 + 0];
 		uint8_t g = pal[i * 3 + 1];
 		uint8_t b = pal[i * 3 + 2];
+#ifdef USE_GL
+		_pal[i] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+#else
 		_pal[i] = SDL_MapRGB(_screenSurface->format, r, g, b);
+#endif
 	}
 }
 
@@ -121,14 +153,24 @@ void SystemStub_SDL::setPaletteEntry(int i, const Color *c) {
 	uint8_t r = (c->r << 2) | (c->r & 3);
 	uint8_t g = (c->g << 2) | (c->g & 3);
 	uint8_t b = (c->b << 2) | (c->b & 3);
+#ifdef USE_GL
+	_pal[i] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+#else
 	_pal[i] = SDL_MapRGB(_screenSurface->format, r, g, b);
+#endif
 }
 
 void SystemStub_SDL::getPaletteEntry(int i, Color *c) {
+#ifdef USE_GL
+	c->r = ((_pal[i] >> 11) & 0x1F) << 1;
+	c->g =  (_pal[i] >>  5) & 0x3F;
+	c->b =  (_pal[i]        & 0x1F) << 1;
+#else
 	SDL_GetRGB(_pal[i], _screenSurface->format, &c->r, &c->g, &c->b);
 	c->r >>= 2;
 	c->g >>= 2;
 	c->b >>= 2;
+#endif
 }
 
 void SystemStub_SDL::setOverscanColor(int i) {
@@ -205,6 +247,45 @@ void SystemStub_SDL::fadeScreen() {
 	memcpy(_fadeScreenBuffer, _screenBuffer + _screenW + 1, fadeScreenBufferSize);
 }
 
+#ifdef USE_GL
+void SystemStub_SDL::updateScreen(int shakeOffset) {
+	const uint16_t *data = _screenBuffer + _screenW + 1;
+	glBindTexture(GL_TEXTURE_2D, _textureId);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, _screenW, _screenH, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, data);
+
+	glClear(GL_COLOR_BUFFER_BIT);
+	glClearColor(0, 0, 0, 255);
+	glLoadIdentity();
+
+	const int W = _screenW * _multiplier;
+	const int H = _screenH * _multiplier;
+	glViewport(0, 0, W, H);
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrtho(0, W, 0, H, 0, 1);
+
+	if (_shaderProgramId != (GLuint)-1) {
+		glUseProgram(_shaderProgramId);
+		glUniform1i(glGetUniformLocation(_shaderProgramId, "rubyTexture"), 0);
+		glUniform2f(glGetUniformLocation(_shaderProgramId, "rubyInputSize"), 256, 224);
+		glUniform2f(glGetUniformLocation(_shaderProgramId, "rubyTextureSize"), 256, 224);
+		glUniform2f(glGetUniformLocation(_shaderProgramId, "rubyOutputSize"), W, H);
+		glUniform1i(glGetUniformLocation(_shaderProgramId, "rubyFrameCount"), _frameCount);
+	}
+
+	glBindTexture(GL_TEXTURE_2D, _textureId);
+	glBegin(GL_TRIANGLE_STRIP);
+		glTexCoord2f(0, 0); glVertex3i(shakeOffset,     H, 0);
+		glTexCoord2f(1, 0); glVertex3i(shakeOffset + W, H, 0);
+		glTexCoord2f(0, 1); glVertex3i(shakeOffset,     0, 0);
+		glTexCoord2f(1, 1); glVertex3i(shakeOffset + W, 0, 0);
+	glEnd();
+	SDL_GL_SwapBuffers();
+
+	_numBlitRects = 0;
+	++_frameCount;
+}
+#else
 static uint16_t blendPixel16(uint16_t colorSrc, uint16_t colorDst, uint32_t mask, int step) {
 	const uint32_t pSrc = (colorSrc | (colorSrc << 16)) & mask;
 	const uint32_t pDst = (colorDst | (colorDst << 16)) & mask;
@@ -273,6 +354,7 @@ void SystemStub_SDL::updateScreen(int shakeOffset) {
 	}
 	_numBlitRects = 0;
 }
+#endif
 
 void SystemStub_SDL::processEvents() {
 	bool paused = false;
@@ -406,15 +488,29 @@ while (true) {
 				if (ev.key.keysym.sym == SDLK_RETURN) {
 					switchGfxMode(!_fullscreen, _currentScaler);
 				} else if (ev.key.keysym.sym == SDLK_KP_PLUS || ev.key.keysym.sym == SDLK_PAGEUP) {
+#ifdef USE_GL
+					if (_multiplier < 7) {
+						++_multiplier;
+						switchGfxMode(_fullscreen, _currentScaler);
+					}
+#else
 					uint8_t s = _currentScaler + 1;
 					if (s < NUM_SCALERS) {
 						switchGfxMode(_fullscreen, s);
 					}
+#endif
 				} else if (ev.key.keysym.sym == SDLK_KP_MINUS || ev.key.keysym.sym == SDLK_PAGEDOWN) {
+#ifdef USE_GL
+					if (_multiplier > 0) {
+						--_multiplier;
+						switchGfxMode(_fullscreen, _currentScaler);
+					}
+#else
 					int8_t s = _currentScaler - 1;
 					if (_currentScaler > 0) {
 						switchGfxMode(_fullscreen, s);
 					}
+#endif
 				}
 				break;
 			} else if (ev.key.keysym.mod & KMOD_CTRL) {
@@ -537,10 +633,26 @@ void SystemStub_SDL::unlockAudio() {
 	SDL_UnlockAudio();
 }
 
+void SystemStub_SDL::setShader(const char *path, int mul) {
+#ifdef USE_GL
+	if (path) {
+		_shader.init(path);
+	}
+	_multiplier = mul;
+	_shaderProgramId = (GLuint)-1;
+#endif
+}
+
 void SystemStub_SDL::prepareGfxMode() {
+#ifdef USE_GL
+	const int w = _screenW * _multiplier;
+	const int h = _screenH * _multiplier;
+	_screenSurface = SDL_SetVideoMode(w, h, 16, _fullscreen ? (SDL_FULLSCREEN | SDL_OPENGL) : SDL_OPENGL);
+#else
 	int w = _screenW * _scalers[_currentScaler].factor;
 	int h = _screenH * _scalers[_currentScaler].factor;
 	_screenSurface = SDL_SetVideoMode(w, h, 16, _fullscreen ? (SDL_FULLSCREEN | SDL_HWSURFACE) : SDL_HWSURFACE);
+#endif
 	if (!_screenSurface) {
 		error("SystemStub_SDL::prepareGfxMode() Unable to allocate _screen buffer");
 	}
@@ -607,3 +719,60 @@ void SystemStub_SDL::drawRect(SDL_Rect *rect, uint8_t color, uint16_t *dst, uint
 		*(dst + j * dstPitch + x1) = *(dst + j * dstPitch + x2) = _pal[color];
 	}
 }
+
+#ifdef USE_GL
+static void printError() {
+	int err;
+
+	while ((err = glGetError()) != GL_NO_ERROR) {
+		warning("Err 0x%x", err);
+	}
+}
+
+static void printShaderLog(GLuint obj) {
+	int len = 0;
+	char buf[1024];
+
+	if (glIsShader(obj)) {
+		glGetShaderInfoLog(obj, 1024, &len, buf);
+	} else {
+		glGetProgramInfoLog(obj, 1024, &len, buf);
+	}
+	if (len > 0) {
+		warning("%s", buf);
+	}
+}
+
+void SystemStub_SDL::createShader() {
+	if (_shader._vsSource[0] && _shader._vsSource[0]) {
+
+		_vertexShaderId = glCreateShader(GL_VERTEX_SHADER);
+		glShaderSource(_vertexShaderId, 1, _shader._vsSource, NULL);
+		glCompileShader(_vertexShaderId);
+		printShaderLog(_vertexShaderId);
+
+		_fragmentShaderId = glCreateShader(GL_FRAGMENT_SHADER);
+		glShaderSource(_fragmentShaderId, 1, _shader._fsSource, NULL);
+		glCompileShader(_fragmentShaderId);
+		printShaderLog(_fragmentShaderId);
+
+		_shaderProgramId = glCreateProgram();
+		glAttachShader(_shaderProgramId, _vertexShaderId);
+		glAttachShader(_shaderProgramId, _fragmentShaderId);
+		glLinkProgram(_shaderProgramId);
+		printShaderLog(_shaderProgramId);
+	}
+}
+
+void SystemStub_SDL::createTexture() {
+	glGenTextures(1, &_textureId);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, _textureId);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, _screenW, _screenH, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, 0);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, _shader._filter);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, _shader._filter);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+	printError();
+}
+#endif

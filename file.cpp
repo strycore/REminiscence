@@ -189,6 +189,18 @@ bool File::open(const char *filename, const char *mode, const char *directory) {
 	return _impl->open(path, mode);
 }
 
+bool File::open(const char *path, const char *mode) {
+	if (_impl) {
+		_impl->close();
+		delete _impl;
+		_impl = 0;
+	}
+	assert(mode[0] != 'z');
+	_impl = new stdFile;
+	debug(DBG_FILE, "Open file '%s' mode '%s' path '%s'", path, mode);
+	return _impl->open(path, mode);
+}
+
 void File::close() {
 	if (_impl) {
 		_impl->close();

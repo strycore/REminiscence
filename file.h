@@ -31,6 +31,7 @@ struct File {
 
 	bool open(const char *filename, const char *mode, FileSystem *fs);
 	bool open(const char *filename, const char *mode, const char *directory);
+	bool open(const char *path, const char *mode);
 	void close();
 	bool ioErr() const;
 	uint32_t size();

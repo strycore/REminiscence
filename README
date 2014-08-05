@@ -1,6 +1,6 @@
 
 REminiscence README
-Release version: 0.2.1 (Mar 15 2011)
+Release version: 0.2.2 ($date)
 -------------------------------------------------------------------------------
 
 
@@ -15,7 +15,8 @@ game can be found at [1], [2] and [3].
 Compiling:
 ----------
 
-Update the defines in the Makefile if needed. The SDL and zlib libraries are required.
+Update the defines in the Makefile. The SDL, GL, GLEW and zlib libraries are
+required.
 
 
 Data Files:
@@ -64,6 +65,13 @@ directory. These paths can be changed using command line switches :
     Usage: rs [OPTIONS]...
     --datapath=PATH   Path to data files (default 'DATA')
     --savepath=PATH   Path to save files (default '.')
+    --levelnum=NUM    Starting level (default '0')
+    --shader=PATH     Path to .xml shader (default none)
+
+Scaling :
+
+The original 256x224 resolution of the game can be upscaled by using
+external shader files. These can be downloaded from [4].
 
 In-game hotkeys :
 
@@ -108,3 +116,4 @@ URLs:
 [1] http://www.mobygames.com/game/flashback-the-quest-for-identity
 [2] http://en.wikipedia.org/wiki/Flashback:_The_Quest_for_Identity
 [3] http://ramal.free.fr/fb_en.htm
+[4] https://gitorious.org/bsnes/xml-shaders/source/shaders/OpenGL/v1.0
