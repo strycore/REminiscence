@@ -485,7 +485,7 @@ while (true) {
 			break;
 		case SDL_KEYDOWN:
 			if (ev.key.keysym.mod & KMOD_ALT) {
-				if (ev.key.keysym.sym == SDLK_RETURN) {
+				if (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_f) {
 					switchGfxMode(!_fullscreen, _currentScaler);
 				} else if (ev.key.keysym.sym == SDLK_KP_PLUS || ev.key.keysym.sym == SDLK_PAGEUP) {
 #ifdef USE_GL
